@@ -1,24 +1,77 @@
+
 from types import FunctionType
+from typing import Any, Literal
 
-#copy paste bc import conflicts
+type ClassDict = dict[str, str | list[ClassDict] | FunctionType]
+type ObjectDict = dict[str, str | ClassDict | FunctionType]
+type NameSpaceDict = dict[str, str | FunctionType]
 
-def find(mro, method_name): #extra mro argument, because can be called from dict_super
-    for mro_class in mro:               #where the desired mro doesn't match the class mro
+#Class constructor
+def new_class(name: str, parents: list[ClassDict], namespace: NameSpaceDict) -> ClassDict:
+    #the namespace dict is directly modified. 
+    # It is the set which will be returned afterward.
+    # This is to preserve self-referentiality in namespace methods
+    class_dict = namespace 
+    class_dict["_classname"] = name 
+    class_dict["_parents"] = parents
+    class_dict["_mro"] = MRO(class_dict)  
+    class_dict["_abstractmethods"] = get_abstract_methods(class_dict) 
+    return class_dict
+
+
+# Methods (under the hood)
+def make(class_dict: ClassDict, *args: any) -> ObjectDict:
+    if class_dict["_abstractmethods"]: 
+         raise TypeError("abstract class cannot be instantiated") 
+    
+    object_dict = {"_class": class_dict} #class constructors only modify this inital object
+    class_dict["_new"](object_dict, *args)
+    return object_dict
+
+
+def find(mro: list[ClassDict], method_name: str) -> FunctionType | Literal["abstractmethod"]:
+    for mro_class in mro:             
         func = mro_class.get(method_name)
-        if (func):
-            return func
-    raise NotImplementedError("method could not be found") #error type could be changed
+        if (func): return func
+    raise NotImplementedError("Method could not be found") 
 
 
+def call(entity_dict: ClassDict | ObjectDict, method_name: str, *args) ->Any:
+    #both objects and classes should be callable. They are identified by unique special attributes _class/_classname
+    if (entity_dict.get("_classname")): 
+        mro = entity_dict["_mro"]
+        method = find(mro, method_name)
+        if isinstance(method, FunctionType): return method(*args) #object instance must be passed by args as first arg
+        else: raise ValueError("cannot call abstract method")
+        
+    else:
+        mro = entity_dict["_class"]["_mro"]
+        method = find(mro, method_name)
+        if isinstance(method, FunctionType): return method(entity_dict, *args) #EVERY method must take an object as argument
+        else: raise ValueError("cannot call abstract method")
 
-def MRO(classDict):
-    parents = classDict["_parents"]
 
-    return [classDict] + merge([*[parent["_mro"] for parent in parents], parents])
+def call_super(class_dict: ClassDict, object_dict: ObjectDict, method_name: str, *args: Any) -> Any: #returns next up class
+    mro = object_dict["_class"]["_mro"] #mro to loop through is object's mro
+    for (i, mro_class) in enumerate(mro):
+        
+        if mro_class is class_dict: 
+            if (mro[i+1:]): 
+                func = find(mro[i+1:], method_name)
+                if isinstance(func, FunctionType): return func(object_dict, *args)
+
+    raise ValueError("method could not be called with super()") 
 
 
+#class constructor helper funcs
 
-def merge(classLists):
+def MRO(class_dict: ClassDict) -> list[ClassDict]:
+    parents = class_dict["_parents"]  
+
+    return [class_dict] + merge([*[parent["_mro"] for parent in parents], parents]) 
+
+
+def merge(classLists: list[list[ClassDict]]) -> list[ClassDict]: 
 
     classLists = [list(classList) for classList in classLists] #copy classList to avoid side effects
 
@@ -55,14 +108,15 @@ def merge(classLists):
 
 
 
-
-def get_abstract_methods(classDict):
-    parents = classDict["_parents"]
-    own_abstract_methods = set(method_name for method_name, value in classDict.items() if value == "abstractmethod")
+def get_abstract_methods(class_dict: ClassDict) -> list[ClassDict]:
+    parents = class_dict["_parents"] 
+    own_abstract_methods = set(method_name for method_name, value in class_dict.items() if value == "abstractmethod") 
+   
     candidate_set = set().union(*[parent["_abstractmethods"] for parent in parents], own_abstract_methods) 
+    
     abc_methods_set = set()
     for candidate in candidate_set:
-        func = find(classDict["_mro"], candidate)
+        func = find(class_dict["_mro"], candidate) 
 
         if func == "abstractmethod":
             abc_methods_set.add(candidate)
